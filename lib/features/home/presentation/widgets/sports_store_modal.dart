@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:iconsax/iconsax.dart';
 
+import '../../data/models/order_model.dart';
 import '../../data/models/product_model.dart';
+import '../../data/services/store_api_service.dart';
+import 'payment_method_sheet.dart';
 
 class SportsStoreModal extends StatefulWidget {
   const SportsStoreModal({super.key});
@@ -20,10 +23,86 @@ class SportsStoreModal extends StatefulWidget {
 }
 
 class _SportsStoreModalState extends State<SportsStoreModal> {
-  final List<ProductModel> _products = ProductModel.mockProducts;
-  final List<CartItemModel> _cartItems = [];
+  final StoreApiService _storeService = StoreApiService();
+
+  List<ProductModel> _products = [];
+  List<CartItemModel> _cartItems = [];
+
+  bool _isLoadingProducts = true;
+  bool _isLoadingCart = false;
   bool _showingCartView = false;
   bool _isCheckingOut = false;
+
+  String _selectedCategory = 'Tất cả';
+  final List<String> _categories = [
+    'Tất cả',
+    'Nước uống',
+    'Vớ & Phụ kiện',
+    'Bóng thi đấu',
+    'Trang phục',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProducts();
+    _loadCart();
+  }
+
+  String? _mapCategoryToBackend(String category) {
+    switch (category) {
+      case 'Nước uống':
+        return 'BEVERAGE';
+      case 'Vớ & Phụ kiện':
+        return 'SOCKS';
+      case 'Bóng thi đấu':
+        return 'BALL';
+      case 'Trang phục':
+        return 'SPORTS_SET';
+      default:
+        return null;
+    }
+  }
+
+  Future<void> _loadProducts() async {
+    setState(() => _isLoadingProducts = true);
+    try {
+      final backendType = _mapCategoryToBackend(_selectedCategory);
+      final list = await _storeService.getProducts(productType: backendType);
+      if (mounted) {
+        setState(() {
+          _products = list.isNotEmpty ? list : ProductModel.mockProducts;
+          _isLoadingProducts = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _products = ProductModel.mockProducts;
+          _isLoadingProducts = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadCart() async {
+    setState(() => _isLoadingCart = true);
+    try {
+      final cart = await _storeService.getCart();
+      if (mounted && cart != null) {
+        setState(() {
+          _cartItems = cart.items;
+          _isLoadingCart = false;
+        });
+      } else if (mounted) {
+        setState(() => _isLoadingCart = false);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isLoadingCart = false);
+      }
+    }
+  }
 
   String _formatPrice(int price) {
     final buffer = StringBuffer();
@@ -53,7 +132,8 @@ class _SportsStoreModalState extends State<SportsStoreModal> {
     return count;
   }
 
-  void _addToCart(ProductModel product) {
+  Future<void> _addToCart(ProductModel product) async {
+    // Optimistic UI update
     setState(() {
       final index = _cartItems.indexWhere((c) => c.product.id == product.id);
       if (index != -1) {
@@ -70,48 +150,112 @@ class _SportsStoreModalState extends State<SportsStoreModal> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+
+    try {
+      final updatedCart = await _storeService.addToCart(product.id, 1);
+      if (mounted) {
+        setState(() {
+          _cartItems = updatedCart.items;
+        });
+      }
+    } catch (e) {
+      // Local addition remains as fallback
+    }
   }
 
-  void _checkout() async {
+  Future<void> _updateQuantity(int index, int delta) async {
+    final item = _cartItems[index];
+    final newQty = item.quantity + delta;
+
+    if (newQty <= 0) {
+      setState(() {
+        _cartItems.removeAt(index);
+      });
+      if (item.cartItemId > 0) {
+        try {
+          await _storeService.removeCartItem(item.cartItemId);
+        } catch (_) {}
+      }
+    } else {
+      setState(() {
+        item.quantity = newQty;
+      });
+      if (item.cartItemId > 0) {
+        try {
+          await _storeService.updateCartItem(item.cartItemId, newQty);
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _checkout() async {
     if (_cartItems.isEmpty) return;
 
     setState(() => _isCheckingOut = true);
-    await Future.delayed(const Duration(milliseconds: 800));
 
-    if (!mounted) return;
+    try {
+      final OrderModel order = await _storeService.checkoutOrder(
+        note: 'Đặt mua đồ dùng / nước uống trực tiếp qua ứng dụng',
+      );
 
-    setState(() {
-      _isCheckingOut = false;
-      _cartItems.clear();
-      _showingCartView = false;
-    });
+      if (!mounted) return;
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.check_circle_rounded, color: Color(0xFF16A34A)),
-            SizedBox(width: 8),
-            Text('Đặt Mua Thành Công!'),
-          ],
-        ),
-        content: const Text(
-          'Đơn hàng của bạn đã được ghi nhận vào hệ thống. Bạn có thể nhận đồ trực tiếp tại quầy tiếp tân cơ sở hoặc yêu cầu mang ra sân khi thi đấu!',
-        ),
-        actions: [
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF16A34A),
-              foregroundColor: Colors.white,
+      setState(() {
+        _isCheckingOut = false;
+        _cartItems.clear();
+      });
+
+      // Close store modal first
+      Navigator.pop(context);
+
+      // Open PaymentMethodSheet for the created order (BR37 & BR38)
+      PaymentMethodSheet.show(
+        context: context,
+        title: 'Thanh Toán Đơn Mua Hàng #${order.orderCode}',
+        amount: order.finalAmount > 0 ? order.finalAmount : order.totalAmount,
+        orderId: order.orderId,
+        paymentType: 'FULL',
+        onPaymentCompleted: (payment) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Row(
+                children: [
+                  Icon(Icons.check_circle_rounded, color: Color(0xFF16A34A)),
+                  SizedBox(width: 8),
+                  Text('Đặt Mua Thành Công!'),
+                ],
+              ),
+              content: Text(
+                'Đơn hàng #${order.orderCode} đã được ghi nhận. Bạn có thể nhận đồ trực tiếp tại quầy tiếp tân hoặc yêu cầu mang ra sân khi thi đấu.',
+              ),
+              actions: [
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF16A34A),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Xác nhận'),
+                ),
+              ],
             ),
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Xác nhận'),
+          );
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isCheckingOut = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.red.shade600,
+            content: Text('Không thể đặt đơn hàng: $e'),
+            behavior: SnackBarBehavior.floating,
           ),
-        ],
-      ),
-    );
+        );
+      }
+    }
   }
 
   @override
@@ -178,6 +322,46 @@ class _SportsStoreModalState extends State<SportsStoreModal> {
           ),
           const Divider(height: 1),
 
+          // Category Selector (when in catalog view)
+          if (!_showingCartView)
+            Container(
+              height: 48,
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                scrollDirection: Axis.horizontal,
+                itemCount: _categories.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final cat = _categories[index];
+                  final isSelected = cat == _selectedCategory;
+                  return ChoiceChip(
+                    label: Text(
+                      cat,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        color: isSelected ? Colors.white : Colors.grey.shade800,
+                      ),
+                    ),
+                    selected: isSelected,
+                    selectedColor: const Color(0xFF16A34A),
+                    backgroundColor: Colors.grey.shade100,
+                    showCheckmark: false,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    onSelected: (selected) {
+                      if (selected) {
+                        setState(() => _selectedCategory = cat);
+                        _loadProducts();
+                      }
+                    },
+                  );
+                },
+              ),
+            ),
+
+          if (!_showingCartView) const Divider(height: 1),
+
           // Main View (Catalog vs Cart)
           Expanded(
             child: _showingCartView ? _buildCartView() : _buildCatalogView(),
@@ -188,6 +372,28 @@ class _SportsStoreModalState extends State<SportsStoreModal> {
   }
 
   Widget _buildCatalogView() {
+    if (_isLoadingProducts) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF16A34A)),
+      );
+    }
+
+    if (_products.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Iconsax.box, size: 56, color: Colors.grey.shade300),
+            const SizedBox(height: 12),
+            const Text(
+              'Không tìm thấy sản phẩm phù hợp',
+              style: TextStyle(fontSize: 15, color: Colors.grey),
+            ),
+          ],
+        ),
+      );
+    }
+
     return ListView.separated(
       padding: const EdgeInsets.all(16),
       itemCount: _products.length,
@@ -236,7 +442,7 @@ class _SportsStoreModalState extends State<SportsStoreModal> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      p.description,
+                      p.description.isNotEmpty ? p.description : 'Sản phẩm chính hãng chất lượng cao',
                       style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -278,6 +484,12 @@ class _SportsStoreModalState extends State<SportsStoreModal> {
   }
 
   Widget _buildCartView() {
+    if (_isLoadingCart) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF16A34A)),
+      );
+    }
+
     if (_cartItems.isEmpty) {
       return Center(
         child: Column(
@@ -347,7 +559,7 @@ class _SportsStoreModalState extends State<SportsStoreModal> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            '${_formatPrice(item.product.price)} x ${item.quantity}',
+                            '${_formatPrice(item.unitPrice)} x ${item.quantity}',
                             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                           ),
                         ],
@@ -357,24 +569,12 @@ class _SportsStoreModalState extends State<SportsStoreModal> {
                       children: [
                         IconButton(
                           icon: const Icon(Icons.remove_circle_outline, size: 20),
-                          onPressed: () {
-                            setState(() {
-                              if (item.quantity > 1) {
-                                item.quantity--;
-                              } else {
-                                _cartItems.removeAt(index);
-                              }
-                            });
-                          },
+                          onPressed: () => _updateQuantity(index, -1),
                         ),
                         Text('${item.quantity}', style: const TextStyle(fontWeight: FontWeight.bold)),
                         IconButton(
                           icon: const Icon(Icons.add_circle_outline, size: 20),
-                          onPressed: () {
-                            setState(() {
-                              item.quantity++;
-                            });
-                          },
+                          onPressed: () => _updateQuantity(index, 1),
                         ),
                       ],
                     ),

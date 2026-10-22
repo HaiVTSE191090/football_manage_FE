@@ -17,6 +17,7 @@ import '../widgets/home_promo_banner.dart';
 import '../widgets/home_quick_actions.dart';
 import '../widgets/home_search_bar.dart';
 import '../widgets/match_finder_section.dart';
+import '../widgets/payment_method_sheet.dart';
 import '../widgets/split_bill_dialog.dart';
 import '../widgets/sports_store_modal.dart';
 import '../widgets/tournament_modal.dart';
@@ -89,22 +90,30 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           _bookings.insert(0, newBooking);
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF16A34A),
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle_rounded, color: Colors.white),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Đặt giữ chỗ thành công tại ${field.name}! Mã: ${newBooking.bookingCode}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
+
+        // Trigger payment flow for the booking deposit / full payment
+        final amountToPay = newBooking.depositAmount > 0
+            ? newBooking.depositAmount
+            : newBooking.totalAmount;
+
+        final numericBookingId = int.tryParse(newBooking.id.replaceAll(RegExp(r'[^0-9]'), ''));
+
+        PaymentMethodSheet.show(
+          context: context,
+          title: 'Thanh Toán Đặt Sân (${newBooking.bookingCode})',
+          amount: amountToPay,
+          bookingId: numericBookingId,
+          paymentType: newBooking.paymentOption == 'deposit' ? 'DEPOSIT' : 'FULL',
+          onPaymentCompleted: (payment) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                backgroundColor: const Color(0xFF16A34A),
+                content: Text(
+                  'Thanh toán đặt sân ${newBooking.bookingCode} thành công qua ${payment.paymentMethod}!',
                 ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );

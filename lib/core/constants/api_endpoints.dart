@@ -33,8 +33,10 @@ class ApiEndpoints {
 
   // Payments
   static const String payments = '/api/payments';
-  static String bookingPayments(String bookingId) => '/api/bookings/$bookingId/payments';
-  static const String paymentCallback = '/api/payments/callback';
+  static const String createPayment = '/api/payments/create';
+  static const String myPayments = '/api/payments/my-payments';
+  static const String paymentCallback = '/api/payments/vnpay-callback';
+  static String paymentById(dynamic id) => '/api/payments/$id';
 
   // Notifications
   static const String notifications = '/api/notifications';
@@ -58,9 +60,16 @@ class ApiEndpoints {
 
   // Store Products & Orders (FR38 - FR42)
   static const String products = '/api/products';
-  static String productById(String id) => '/api/products/$id';
+  static String productById(dynamic id) => '/api/products/$id';
   static const String cart = '/api/cart';
+  static const String cartItems = '/api/cart/items';
+  static String cartItemById(dynamic id) => '/api/cart/items/$id';
+  static const String cartClear = '/api/cart/clear';
   static const String orders = '/api/orders';
+  static const String orderCheckout = '/api/orders/checkout';
+  static const String myOrders = '/api/orders/my-orders';
+  static String orderById(dynamic id) => '/api/orders/$id';
+  static String cancelOrder(dynamic id) => '/api/orders/$id/cancel';
 
   // Admin Endpoints
   static const String adminFacilities = '/api/admin/facilities';
